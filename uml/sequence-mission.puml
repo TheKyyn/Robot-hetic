@@ -1,0 +1,77 @@
+@startuml sequence-mission
+title RobLaude - Séquence: Demander un Transport (UC-01)
+
+skinparam sequenceArrowThickness 2
+skinparam participantPadding 20
+
+actor "Utilisateur" as U
+participant "Frontend\n(React)" as F
+participant "Backend\n(Node.js)" as B
+database "MySQL" as DB
+participant "Robot\n(ROS)" as R
+
+== Création de la mission ==
+
+U -> F : Ouvre dashboard
+activate F
+F -> F : Affiche formulaire\n"Nouvelle mission"
+
+U -> F : Sélectionne point départ\n"Accueil"
+U -> F : Sélectionne point arrivée\n"Bureau 204"
+U -> F : Confirme la mission
+
+F -> B : POST /api/missions\n{from: "accueil", to: "bureau-204"}
+activate B
+
+B -> DB : INSERT mission\n(status: "pending")
+activate DB
+DB --> B : mission_id: 42
+deactivate DB
+
+B -> R : MQTT publish\ntopic: robot/mission/start\n{id: 42, from, to}
+activate R
+
+R --> B : MQTT publish\ntopic: robot/ack\n{id: 42, status: "accepted"}
+
+B -> DB : UPDATE mission\nstatus: "in_progress"
+activate DB
+DB --> B : OK
+deactivate DB
+
+B --> F : 201 Created\n{mission_id: 42, status: "in_progress"}
+deactivate B
+
+F --> U : Affiche "Mission en cours"\navec carte temps réel
+deactivate F
+
+== Suivi temps réel ==
+
+loop Chaque seconde
+  R -> B : MQTT publish\ntopic: robot/position\n{id: 42, x, y, status}
+  activate B
+  B -> F : WebSocket\n{type: "position", x, y}
+  activate F
+  F -> U : Met à jour position\nsur la carte
+  deactivate F
+  deactivate B
+end
+
+== Arrivée ==
+
+R -> B : MQTT publish\ntopic: robot/mission/complete\n{id: 42}
+deactivate R
+activate B
+
+B -> DB : UPDATE mission\nstatus: "completed"
+activate DB
+DB --> B : OK
+deactivate DB
+
+B -> F : WebSocket\n{type: "mission_complete", id: 42}
+activate F
+deactivate B
+
+F --> U : Affiche "Livraison effectuée"
+deactivate F
+
+@enduml

@@ -1,0 +1,79 @@
+@startuml state-mission
+title RobLaude - Diagramme d'États: Cycle de Vie d'une Mission
+
+skinparam state {
+  BackgroundColor<<success>> LightGreen
+  BackgroundColor<<error>> LightCoral
+  BackgroundColor<<warning>> LightYellow
+}
+
+[*] --> EnAttente : Mission créée
+
+state "En Attente" as EnAttente {
+  EnAttente : Robot disponible
+  EnAttente : Validation des points
+}
+
+state "En Cours" as EnCours {
+  state "Vers Départ" as VersDepart
+  state "En Collecte" as EnCollecte
+  state "Vers Arrivée" as VersArrivee
+
+  VersDepart : Navigation vers\npoint de collecte
+  EnCollecte : Attente chargement\ndu document
+  VersArrivee : Navigation vers\npoint de livraison
+
+  [*] --> VersDepart
+  VersDepart --> EnCollecte : Point atteint
+  EnCollecte --> VersArrivee : Document chargé\n(confirmation utilisateur)
+  VersArrivee --> [*] : Destination atteinte
+}
+
+state "En Pause" as EnPause <<warning>> {
+  EnPause : Arrêt d'urgence activé
+  EnPause : Attente intervention
+}
+
+state "Terminée" as Terminee <<success>> {
+  Terminee : Mission accomplie
+  Terminee : Log enregistré
+}
+
+state "Échec" as Echec <<error>> {
+  Echec : Obstacle infranchissable
+  Echec : Timeout dépassé
+  Echec : Erreur robot
+}
+
+state "Annulée" as Annulee <<error>> {
+  Annulee : Annulation manuelle
+}
+
+EnAttente --> EnCours : Robot assigné\n& prêt
+EnAttente --> Annulee : Annulation\navant départ
+
+EnCours --> EnPause : Arrêt d'urgence\n(utilisateur ou capteur)
+EnCours --> Terminee : Destination atteinte\n& livraison confirmée
+EnCours --> Echec : Obstacle bloquant\n/ Timeout / Erreur
+
+EnPause --> EnCours : Reprise mission
+EnPause --> Annulee : Annulation\npar utilisateur
+
+Terminee --> [*]
+Echec --> [*]
+Annulee --> [*]
+
+note right of EnPause
+  L'arrêt d'urgence peut être
+  déclenché par:
+  - Bouton STOP (UI)
+  - Raccourci clavier
+  - Détection obstacle (Lidar)
+end note
+
+note bottom of EnCours
+  Sous-états internes
+  pour suivi précis
+end note
+
+@enduml

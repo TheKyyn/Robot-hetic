@@ -1,0 +1,42 @@
+@startuml use-case-diagram
+title RobLaude - Diagramme de Cas d'Utilisation
+
+left to right direction
+skinparam actorStyle awesome
+skinparam packageStyle rectangle
+
+actor "Utilisateur" as user
+actor "Admin" as admin
+actor "Robot" as robot <<system>>
+
+rectangle "RobLaude - Robot d'Assistance Autonome" {
+  usecase "UC-01\nDemander un transport" as UC1
+  usecase "UC-02\nSuivre la mission" as UC2
+  usecase "UC-03\nArrêt d'urgence" as UC3
+  usecase "UC-04\nConfigurer les points" as UC4
+  usecase "UC-05\nConsulter l'historique" as UC5
+}
+
+user --> UC1
+user --> UC2
+user --> UC3
+admin --> UC4
+admin --> UC5
+admin --|> user : extends
+
+UC1 --> robot : <<communicate>>
+UC2 --> robot : <<communicate>>
+UC3 --> robot : <<communicate>>
+
+note right of UC1
+  Point de départ et
+  d'arrivée sélectionnés
+  via interface accessible
+end note
+
+note right of UC3
+  Accessible via bouton
+  et raccourci clavier
+end note
+
+@enduml
