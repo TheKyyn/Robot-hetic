@@ -1,0 +1,289 @@
+@startuml sequence-uc02-manipulation
+title RobLaude v1.1 - Séquence: Récupérer un Objet avec Bras Robotique (UC-02) — Corrigé
+skinparam sequenceArrowThickness 2
+skinparam participantPadding 15
+skinparam sequenceGroupBorderColor DarkBlue
+
+actor "Utilisateur" as U
+participant "Frontend\n(React/TS)" as F
+participant "Backend\n(Node.js)" as B
+database "MySQL\n(Prisma)" as DB
+queue "Broker MQTT\n(Mosquitto)" as MQ
+participant "Nav2\n(ROS2 Node)" as NAV
+participant "MoveIt2\n(ROS2 Node)" as ARM
+participant "Vision\n(RealSense\n+ OpenCV)" as VIS
+
+== Initialisation de la mission ==
+
+U -> F : Sélectionne "Récupérer un objet"
+activate F
+F -> B : GET /api/objects\n{status: "available"}
+activate B
+B -> DB : SELECT objects WHERE available = true
+activate DB
+DB --> B : [{id: 7, name: "Livre - 1984", location: "Étagère A3"}]
+deactivate DB
+B --> F : 200 OK [{objects list}]
+deactivate B
+
+F --> U : Affiche liste objets disponibles
+U -> F : Sélectionne "Livre - 1984"\n+ point livraison "Table 3"
+U -> F : Confirme la mission
+
+F -> B : POST /api/missions\n{object_id: 7, to: "table-3", type: "pick_and_place"}
+activate B
+B -> B : Vérifie robot disponible\n& bras calibré
+
+alt Robot ou bras indisponible
+  B --> F : 409 Conflict\n{error: "arm_not_ready"}
+  F --> U : "Bras robotique indisponible"
+  deactivate B
+  deactivate F
+
+else Tout disponible
+  B -> DB : INSERT mission\n{status: "pending", type: "pick_and_place", object_id: 7}
+  activate DB
+  DB --> B : mission_id: 43
+  deactivate DB
+  B -> MQ : publish robot/mission/start\n{id: 43, type: "pick_and_place",\nobject_id: 7, object_location: "A3", to: "table-3"}
+  activate MQ
+  MQ -> NAV : forward
+  activate NAV
+  NAV --> MQ : ack {id: 43, status: "accepted"}
+  MQ --> B : forward
+  deactivate MQ
+  B -> DB : UPDATE mission status: "navigating_to_object"
+  activate DB
+  DB --> B : OK
+  deactivate DB
+  B --> F : 201 Created {mission_id: 43, status: "navigating_to_object"}
+
+  ' WebSocket établi dans la branche succès (cohérence avec UC-01 Fix #4)
+  B -> F : WebSocket connect\n{type: "mission_subscribed", id: 43}
+  deactivate B
+  F --> U : "Mission en cours - Navigation vers l'objet"
+  deactivate F
+end
+
+== Phase 1 : Navigation vers l'objet ==
+
+loop ~10Hz
+  NAV -> MQ : publish robot/position\n{id: 43, x, y, substate: "navigating_to_object"}
+  activate MQ
+  MQ -> B : forward
+  activate B
+  B -> F : WebSocket {type: "position_update",\nsubstate: "navigating_to_object"}
+  activate F
+  F -> U : Met à jour carte
+  deactivate F
+  deactivate B
+  deactivate MQ
+end
+
+NAV -> MQ : publish robot/nav/arrived\n{id: 43, location: "A3"}
+activate MQ
+MQ -> B : forward
+activate B
+B -> DB : UPDATE mission status: "detecting_object"
+activate DB
+DB --> B : OK
+deactivate DB
+B -> F : WebSocket {type: "status_update",\nsubstate: "detecting_object"}
+activate F
+F -> U : "Détection de l'objet en cours..."
+deactivate F
+deactivate B
+deactivate MQ
+
+== Phase 2 : Détection de l'objet (RealSense + OpenCV) ==
+
+NAV -> VIS : Activer détection\n{object_id: 7, reference_image}
+activate VIS
+VIS -> VIS : Capture flux RealSense\nAnalyse OpenCV\nCalcul position 3D (x,y,z)
+
+alt Objet détecté
+  VIS --> NAV : {detected: true,\npose_3d: {x, y, z, roll, pitch, yaw}}
+  deactivate VIS
+  NAV -> MQ : publish robot/vision/detected\n{id: 43, object_pose: {...}}
+  activate MQ
+  MQ -> B : forward
+  activate B
+  B -> DB : UPDATE mission status: "grasping"
+  activate DB
+  DB --> B : OK
+  deactivate DB
+  B -> F : WebSocket {type: "object_detected"}
+  activate F
+  F -> U : "Objet détecté ✓ — Saisie en cours"
+  deactivate F
+  deactivate B
+  deactivate MQ
+
+else Objet non détecté
+  VIS --> NAV : {detected: false}
+  deactivate VIS
+  NAV -> MQ : publish robot/mission/failed\n{id: 43, reason: "object_not_found"}
+  activate MQ
+  MQ -> B : forward
+  activate B
+  B -> DB : UPDATE mission\nstatus: "grasp_failed",\nreason: "object_not_found"
+  activate DB
+  DB --> B : OK
+  deactivate DB
+  B -> F : WebSocket {type: "mission_grasp_failed",\nreason: "object_not_found"}
+  activate F
+  deactivate B
+  deactivate MQ
+  F -> U : "Objet introuvable\n→ Repositionner l'objet et relancer ?"
+  deactivate F
+end
+
+== Phase 3 : Saisie de l'objet (MoveIt2) — 3 tentatives max ==
+
+NAV -> ARM : Transmettre pose_3d\n+ profil de saisie
+activate ARM
+
+loop Max 3 tentatives
+  ARM -> ARM : Calcul trajectoire\n(MoveIt2 motion planning)
+  ARM -> ARM : Exécution mouvement\nbras vers objet
+
+  alt Saisie réussie (capteur force/contact)
+    ARM -> ARM : Fermeture gripper\nVérification prise
+    ARM --> NAV : {grasp_success: true, attempt: N}
+    NAV -> MQ : publish robot/arm/grasp_success\n{id: 43, attempt: N}
+    activate MQ
+    MQ -> B : forward
+    activate B
+    B -> DB : UPDATE mission status: "transporting"
+    activate DB
+    DB --> B : OK
+    deactivate DB
+    B -> F : WebSocket {type: "grasp_success", attempt: N}
+    activate F
+    F -> U : "Objet saisi ✓ — Transport en cours"
+    deactivate F
+    deactivate B
+    deactivate MQ
+    break
+
+  else Saisie échouée (tentative < 3)
+    ARM -> ARM : Reset position bras\nAjustement pose
+    ARM --> NAV : {grasp_success: false, attempt: N}
+    NAV -> MQ : publish robot/arm/grasp_failed\n{id: 43, attempt: N, max: 3}
+    activate MQ
+    MQ -> B : forward
+    activate B
+    B -> F : WebSocket {type: "grasp_attempt_failed",\nattempt: N, max: 3}
+    activate F
+    F -> U : "Tentative N/3 échouée...\nAjustement en cours"
+    deactivate F
+    deactivate B
+    deactivate MQ
+  end
+end
+
+' === 3 tentatives épuisées sans succès ===
+opt 3 tentatives épuisées
+  ARM --> NAV : {grasp_success: false, attempts_exhausted: true}
+  deactivate ARM
+  NAV -> MQ : publish robot/mission/grasp_exhausted\n{id: 43, reason: "grasp_failed_3_attempts"}
+  activate MQ
+  MQ -> B : forward
+  activate B
+  B -> DB : UPDATE mission\nstatus: "grasp_failed",\nreason: "grasp_failed_3_attempts"
+  activate DB
+  DB --> B : OK
+  deactivate DB
+  B -> F : WebSocket {type: "mission_grasp_failed",\nreason: "grasp_failed_3_attempts"}
+  activate F
+  deactivate B
+  deactivate MQ
+  F -> U : "Saisie impossible après 3 tentatives\n→ Intervention manuelle requise\n→ Relancer une mission ?"
+  deactivate F
+end
+
+== Phase 4 : Transport vers destination ==
+
+deactivate ARM
+
+loop ~10Hz
+  NAV -> MQ : publish robot/position\n{id: 43, x, y, substate: "transporting"}
+  activate MQ
+  MQ -> B : forward
+  activate B
+  B -> F : WebSocket {type: "position_update",\nsubstate: "transporting"}
+  activate F
+  F -> U : Met à jour carte\n"Transport en cours"
+  deactivate F
+  deactivate B
+  deactivate MQ
+end
+
+' === Arrêt d'urgence possible pendant transport (cohérence UC-04) ===
+opt Arrêt d'urgence pendant transport
+  U -> F : Clique STOP (ou Espace)
+  activate F
+  F -> B : POST /api/missions/43/emergency-stop
+  activate B
+  ' FIX #3 — Topic dédié + QoS 2, pas de "priority" dans le payload
+  B -> MQ : publish robot/emergency-stop\n{id: 43}\n[QoS 2 - exactly once]
+  activate MQ
+  MQ -> NAV : forward (subscriber haute priorité)
+  NAV -> ARM : Sécuriser bras\n(maintien gripper + freeze)
+  NAV --> MQ : publish robot/ack\n{id: 43, status: "paused",\narm_secured: true}
+  MQ --> B : forward
+  deactivate MQ
+  B -> DB : UPDATE mission status: "paused"
+  activate DB
+  DB --> B : OK
+  deactivate DB
+  B -> F : WebSocket\n{type: "mission_paused", id: 43}
+  deactivate B
+  F --> U : "Robot arrêté — Bras sécurisé\n→ Reprendre ou Annuler ?"
+  deactivate F
+end
+
+opt Détection chute objet (capteur force gripper)
+  NAV -> MQ : publish robot/arm/object_dropped\n{id: 43}
+  activate MQ
+  MQ -> B : forward
+  activate B
+  B -> DB : UPDATE mission\nstatus: "failed",\nreason: "object_dropped"
+  activate DB
+  DB --> B : OK
+  deactivate DB
+  B -> F : WebSocket {type: "mission_failed",\nreason: "object_dropped"}
+  activate F
+  deactivate B
+  deactivate MQ
+  F -> U : "Objet perdu pendant le transport\n→ Arrêt mission"
+  deactivate F
+end
+
+== Phase 5 : Dépôt de l'objet ==
+
+NAV -> ARM : Destination atteinte\nDéposer objet
+activate ARM
+ARM -> ARM : Calcul trajectoire dépôt\nMoveIt2 planning
+ARM -> ARM : Descente bras\nOuverture gripper\nDépôt objet
+ARM -> ARM : Retour position repos
+ARM --> NAV : {deposit_success: true}
+deactivate ARM
+deactivate NAV
+
+NAV -> MQ : publish robot/mission/complete\n{id: 43, status: "completed"}
+activate MQ
+MQ -> B : forward
+activate B
+deactivate MQ
+B -> DB : UPDATE mission\nstatus: "completed",\ncompleted_at: NOW()
+activate DB
+DB --> B : OK
+deactivate DB
+B -> F : WebSocket {type: "mission_complete", id: 43}
+activate F
+deactivate B
+F --> U : "Livraison effectuée ✓\nObjet déposé à Table 3"
+deactivate F
+
+@enduml
