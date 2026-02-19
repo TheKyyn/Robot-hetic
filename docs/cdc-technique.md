@@ -2,8 +2,8 @@
 
 # Cahier des Charges Technique - RobLaude
 
-**Version:** 1.0
-**Date:** 2026-02-18
+**Version:** 1.1
+**Date:** 2026-02-19
 **Équipe:** Maxime Theophilos, Wissem Karboub
 **Projet:** HETIC Web3 - Robotique
 
@@ -11,7 +11,7 @@
 
 ## 1. Vision
 
-**RobLaude** est un robot d'assistance autonome qui transporte des documents entre points d'un ERP (Établissement Recevant du Public), contrôlé via une interface web accessible, pour améliorer l'autonomie des personnes à mobilité réduite.
+**RobLaude** est un robot d'assistance autonome qui navigue, saisit et transporte des objets (documents, livres) entre points d'un ERP (Établissement Recevant du Public), contrôlé via une interface web accessible, pour améliorer l'autonomie des personnes à mobilité réduite.
 
 ---
 
@@ -20,16 +20,17 @@
 ### Objectifs
 
 1. Naviguer de manière autonome dans un espace intérieur en évitant les obstacles
-2. Transporter des objets légers (documents, petits colis) entre deux points désignés
-3. Fournir une interface web accessible (WCAG AA) pour le contrôle et le monitoring en temps réel
-4. Communiquer l'état du robot via WebSocket (position, statut mission, alertes)
+2. Détecter, saisir et manipuler des objets avec le bras robotique (livres, documents, petits colis)
+3. Transporter des objets entre deux points désignés
+4. Fournir une interface web accessible (WCAG AA) pour le contrôle et le monitoring en temps réel
+5. Communiquer l'état du robot via WebSocket (position, statut mission, alertes)
 
 ### Non-objectifs (MVP)
 
-1. Pas de manipulation d'objets avec le bras robotique (extension future)
-2. Pas de gestion multi-robots (fleet management)
-3. Pas de reconnaissance faciale ou vocale
-4. Pas de fonctionnement en extérieur
+1. Pas de gestion multi-robots (fleet management)
+2. Pas de reconnaissance faciale ou vocale
+3. Pas de fonctionnement en extérieur
+4. Pas de manipulation d'objets complexes ou lourds (>500g)
 
 ### Personas
 
@@ -48,10 +49,12 @@ Veut monitorer les missions du robot, consulter l'historique des livraisons, et 
 | ID | Nom | Acteur | But |
 |----|-----|--------|-----|
 | UC-01 | Demander un transport | Utilisateur | Envoyer le robot chercher/livrer un document |
-| UC-02 | Suivre la mission | Utilisateur | Voir la position et l'état du robot en temps réel |
-| UC-03 | Arrêt d'urgence | Utilisateur / Système | Stopper immédiatement le robot |
-| UC-04 | Configurer les points | Admin | Définir les points de collecte/livraison |
-| UC-05 | Consulter l'historique | Admin | Voir les missions passées et statistiques |
+| UC-02 | Récupérer un objet | Utilisateur | Demander au robot de saisir un objet à un emplacement |
+| UC-03 | Suivre la mission | Utilisateur | Voir la position et l'état du robot en temps réel |
+| UC-04 | Arrêt d'urgence | Utilisateur / Système | Stopper immédiatement le robot |
+| UC-05 | Configurer les points | Admin | Définir les points de collecte/livraison |
+| UC-06 | Configurer les objets | Admin | Définir les objets saisissables et leurs positions |
+| UC-07 | Consulter l'historique | Admin | Voir les missions passées et statistiques |
 
 ### UC-01 : Demander un transport (détaillé)
 
@@ -78,7 +81,38 @@ Veut monitorer les missions du robot, consulter l'historique des livraisons, et 
 
 ---
 
-### UC-03 : Arrêt d'urgence (détaillé)
+### UC-02 : Récupérer un objet (détaillé)
+
+**Acteurs:** Utilisateur (via interface web accessible)
+
+**Préconditions:**
+- Robot connecté et en attente
+- Objet enregistré dans le système (position, type)
+- Bras robotique calibré
+
+**Scénario nominal:**
+1. L'utilisateur ouvre le dashboard et sélectionne "Récupérer un objet"
+2. L'utilisateur sélectionne l'objet souhaité (ex: "Livre - 1984")
+3. L'utilisateur choisit le point de livraison (ex: "Table 3")
+4. L'utilisateur confirme la mission
+5. Le robot navigue vers l'emplacement de l'objet
+6. Le robot détecte l'objet via caméra RealSense
+7. Le robot saisit l'objet avec le bras robotique
+8. Le robot confirme la saisie réussie
+9. Le robot navigue vers le point de livraison
+10. Le robot dépose l'objet
+11. L'interface affiche "Livraison effectuée"
+
+**Extensions:**
+- 6a. Objet non détecté → alerte "Objet introuvable", proposer retry ou annulation
+- 7a. Saisie échouée → 3 tentatives max, puis alerte et annulation
+- 8a. Objet tombé pendant transport → alerte "Objet perdu", arrêt mission
+
+**Postconditions:** Objet livré au point demandé, mission loguée
+
+---
+
+### UC-04 : Arrêt d'urgence (détaillé)
 
 **Acteurs:** Utilisateur ou Système (détection obstacle)
 
@@ -177,9 +211,12 @@ Les diagrammes sont disponibles dans le dossier `uml/` au format PlantUML :
 | **Base de données** | MySQL | Robuste, maîtrisé par l'équipe, bon tooling |
 | **ORM** | Prisma | DX moderne, migrations faciles, typage TypeScript |
 | **Robot comm** | MQTT (Mosquitto) | Standard IoT, léger, pub/sub adapté aux capteurs |
-| **Robot OS** | ROS Noetic (Ubuntu 20.04) | Standard industrie, compatible Jetson Nano |
+| **Robot OS** | ROS2 Humble (Ubuntu 22.04) | Standard industrie récent, meilleur support |
 | **Simulation** | Gazebo | Simulateur ROS, permet de dev sans hardware |
-| **Navigation** | ROS Navigation Stack + SLAM | Solution éprouvée pour navigation autonome |
+| **Navigation** | Nav2 + SLAM Toolbox | Solution éprouvée pour navigation autonome ROS2 |
+| **Manipulation** | MoveIt2 | Framework standard pour contrôle de bras robotique |
+| **Vision** | OpenCV + RealSense SDK | Détection d'objets, calcul de position 3D |
+| **Détection objets** | YOLOv8 (optionnel) | Détection ML si besoin de reconnaissance avancée |
 
 ### Alternatives écartées
 
@@ -199,11 +236,14 @@ Les diagrammes sont disponibles dans le dossier `uml/` au format PlantUML :
 
 | Risque | Probabilité | Impact | Mitigation |
 |--------|-------------|--------|------------|
-| Courbe d'apprentissage ROS trop longue | **Haute** | Fort | Commencer par tutoriels Gazebo dès S1, prévoir 2-3 semaines de formation avant hardware |
+| Courbe d'apprentissage ROS2 trop longue | **Haute** | Fort | Commencer par tutoriels Gazebo dès S1, prévoir 3-4 semaines de formation avant hardware |
 | Hardware livré en retard | Moyenne | Fort | Architecture découplée permet d'avancer sur web + simulation sans robot |
 | Latence MQTT trop élevée | Faible | Moyen | Tests de latence dès réception hardware, fallback sur Serial USB si besoin |
 | Navigation imprécise en environnement réel | **Haute** | Moyen | Calibration SLAM progressive, commencer avec parcours simples, agrandir zone |
-| Intégration ROS ↔ Node.js complexe | Moyenne | Moyen | Utiliser bibliothèque MQTT standard, POC d'intégration S3-S4 |
+| Manipulation bras robotique complexe | **Haute** | **Fort** | POC manipulation dès réception hardware, commencer avec objets simples, calibration hand-eye |
+| Détection objets peu fiable | Moyenne | Fort | Utiliser marqueurs/QR codes en fallback si vision pure échoue |
+| Saisie d'objets échoue fréquemment | Moyenne | Fort | Design poses de saisie prédéfinies, limiter variété d'objets au début |
+| Intégration ROS2 ↔ Node.js complexe | Moyenne | Moyen | Utiliser bibliothèque MQTT standard, POC d'intégration S5-S6 |
 | Accessibilité WCAG insuffisante | Faible | Fort | Audit accessibilité intégré dès le début (axe-core, tests manuels clavier) |
 | Un membre de l'équipe absent/bloqué | Moyenne | Fort | Cross-training, documentation continue, code reviews régulières |
 | Professeurs doutent de la compréhension | Moyenne | **Critique** | Sessions d'explication mutuelle, documenter les apprentissages, éviter code copié non compris |
@@ -297,24 +337,41 @@ main (prod)   ← code stable, déployé en production
 | Phase | Semaines | Objectif | Livrables |
 |-------|----------|----------|-----------|
 | **CDC & Setup** | S1-S2 | CDC validé, environnement prêt | CDC mergé, repo configuré, CI/CD basique, Discord setup |
-| **Formation & Fondations** | S3-S4 | Apprendre ROS, poser bases web | Tutoriels ROS/Gazebo complétés, squelette React + Node.js, maquettes UI |
-| **POC** | S5-S6 | Valider choix techniques | Robot simulé navigue dans Gazebo, WebSocket fonctionne, MQTT testé |
-| **MVP Web** | S7-S10 | Dashboard fonctionnel | Interface accessible complète, API REST, connexion MQTT mockée |
-| **MVP Robot** | S8-S12 | Navigation réelle | SLAM calibré, robot navigue entre 2 points réels, intégration serveur |
-| **Intégration** | S13-S15 | Système complet | Web + Robot communiquent, tests end-to-end, scénario complet fonctionnel |
-| **Polish & Demo** | S16-S18 | Prêt pour évaluation | Bug fixes, documentation finale, démo préparée, répétitions |
+| **Formation ROS2 & Nav** | S3-S4 | Apprendre ROS2, navigation, bases web | Tutoriels ROS2/Gazebo/Nav2 complétés, squelette React + Node.js |
+| **Formation Manipulation** | S5-S6 | Apprendre MoveIt2, vision | Tutoriels MoveIt2 complétés, OpenCV basics, maquettes UI |
+| **POC Navigation** | S7-S8 | Valider navigation | Robot simulé navigue dans Gazebo, MQTT testé, WebSocket fonctionne |
+| **POC Manipulation** | S9-S10 | Valider manipulation | Bras saisit objet en simulation, détection objet fonctionne |
+| **MVP Web** | S7-S12 | Dashboard fonctionnel | Interface accessible complète, API REST, connexion MQTT mockée |
+| **MVP Robot** | S11-S14 | Navigation + manipulation réelle | SLAM calibré, robot navigue et saisit objets réels |
+| **Intégration** | S15-S16 | Système complet | Web + Robot communiquent, tests end-to-end, scénario complet fonctionnel |
+| **Polish & Demo** | S17-S18 | Prêt pour évaluation | Bug fixes, documentation finale, démo préparée, répétitions |
 
-**Note:** MVP Web et MVP Robot en parallèle (Maxime / Wissem), convergence en phase Intégration.
+**Note:** MVP Web en parallèle des phases POC et MVP Robot. Convergence en phase Intégration.
+
+**Répartition suggérée:**
+- Maxime: Dashboard web, API, intégration MQTT côté serveur
+- Wissem: ROS2, navigation, manipulation, bridge MQTT côté robot
+- Cross-training régulier pour que chacun comprenne l'ensemble
 
 ### Questions ouvertes
 
-- [ ] MQTT ou Serial USB pour communication robot ? → À valider en POC S5-S6
-- [ ] Quel broker MQTT ? (Mosquitto local vs cloud) → S5
-- [ ] Format exact des messages robot ↔ serveur ? → S5-S6
+**Communication:**
+- [ ] MQTT ou Serial USB pour communication robot ? → À valider en POC S7-S8
+- [ ] Quel broker MQTT ? (Mosquitto local vs cloud) → S7
+- [ ] Format exact des messages robot ↔ serveur ? → S7-S8
+
+**Navigation:**
 - [ ] Quelle lib pour la carte temps réel ? (Leaflet, custom canvas, Three.js 2D) → S7
-- [ ] Comment simuler le robot pour les tests automatisés ? → S5
+- [ ] Comment simuler le robot pour les tests automatisés ? → S7
+
+**Manipulation:**
+- [ ] Quels objets exactement pour la démo ? (livres, boîtes, documents) → S5
+- [ ] Vision pure ou QR codes/marqueurs pour détection ? → POC S9-S10
+- [ ] Poses de saisie prédéfinies ou calcul dynamique ? → POC S9-S10
+- [ ] Calibration hand-eye: méthode automatique ou manuelle ? → S11
+
+**Fonctionnel:**
 - [ ] Faut-il un système de file d'attente de missions ? → S7
-- [ ] Extension bras robotique réaliste dans le temps restant ? → Revue S12
 
 ---
 
@@ -324,14 +381,24 @@ main (prod)   ← code stable, déployé en production
 
 Si le temps le permet, les extensions suivantes sont envisagées par ordre de priorité :
 
-1. **Manipulation avec bras robotique** - Saisir un livre sur une étagère (UC bibliothèque)
-2. **Commandes vocales** - Intégration Web Speech API
-3. **File d'attente de missions** - Gestion de plusieurs demandes en série
-4. **Historique et analytics** - Dashboard admin avec statistiques d'utilisation
+1. **Commandes vocales** - Intégration Web Speech API
+2. **File d'attente de missions** - Gestion de plusieurs demandes en série
+3. **Historique et analytics** - Dashboard admin avec statistiques d'utilisation
+4. **Reconnaissance avancée d'objets** - Modèle ML custom pour nouveaux objets
 
-### Ressources d'apprentissage ROS
+### Ressources d'apprentissage
 
-- [ROS Noetic Tutorials](http://wiki.ros.org/noetic/Tutorials)
-- [Gazebo Tutorials](http://gazebosim.org/tutorials)
+**ROS2 & Navigation:**
+- [ROS2 Humble Tutorials](https://docs.ros.org/en/humble/Tutorials.html)
+- [Nav2 Documentation](https://docs.nav2.org/)
+- [TurtleBot3 Simulation](https://emanual.robotis.com/docs/en/platform/turtlebot3/simulation/)
+- [Gazebo Tutorials](https://gazebosim.org/docs)
+
+**Manipulation:**
+- [MoveIt2 Tutorials](https://moveit.picknik.ai/main/doc/tutorials/tutorials.html)
+- [OpenCV Python Tutorials](https://docs.opencv.org/4.x/d6/d00/tutorial_py_root.html)
+- [Intel RealSense ROS2](https://github.com/IntelRealSense/realsense-ros)
+
+**Hardware:**
 - [Yahboom Transbot Documentation](https://category.yahboom.net/collections/jetson)
-- [Navigation Stack Guide](http://wiki.ros.org/navigation)
+- [Jetson Nano Developer Kit](https://developer.nvidia.com/embedded/learn/get-started-jetson-nano-devkit)
