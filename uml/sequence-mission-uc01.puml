@@ -1,0 +1,219 @@
+@startuml sequence-mission-uc01
+title RobLaude v1.1 - Séquence: Demander un Transport (UC-01) — Corrigé
+skinparam sequenceArrowThickness 2
+skinparam participantPadding 20
+skinparam sequenceGroupBorderColor DarkBlue
+
+actor "Utilisateur" as U
+participant "Frontend\n(React/TS)" as F
+participant "Backend\n(Node.js)" as B
+database "MySQL\n(Prisma)" as DB
+queue "Broker MQTT\n(Mosquitto)" as MQ
+participant "Robot\n(ROS2 Humble)" as R
+
+== Création de la mission ==
+
+U -> F : Ouvre dashboard
+activate F
+F -> F : Affiche formulaire\n"Nouvelle mission"
+
+U -> F : Sélectionne point départ\n(ex: "Accueil")
+U -> F : Sélectionne point arrivée\n(ex: "Bureau 204")
+U -> F : Confirme la mission
+
+F -> B : POST /api/missions\n{from: "accueil", to: "bureau-204", type: "transport"}
+activate B
+
+B -> B : Vérifie robot disponible\n& points configurés
+
+alt Robot indisponible
+  B --> F : 409 Conflict\n{error: "robot_busy", canQueue: true}
+  F --> U : "Robot occupé"\n→ Proposer file d'attente
+  deactivate B
+  deactivate F
+
+else Robot disponible
+  B -> DB : INSERT mission\n{status: "pending", type: "transport"}
+  activate DB
+  DB --> B : mission_id: 42
+  deactivate DB
+
+  B -> MQ : publish robot/mission/start\n{id: 42, from, to, type: "transport"}
+  activate MQ
+  MQ -> R : forward message
+  activate R
+
+  R --> MQ : publish robot/ack\n{id: 42, status: "accepted"}
+  MQ --> B : forward ack
+  deactivate MQ
+
+  B -> DB : UPDATE mission\nstatus: "navigating_to_pickup"
+  activate DB
+  DB --> B : OK
+  deactivate DB
+
+  B --> F : 201 Created\n{mission_id: 42, status: "navigating_to_pickup"}
+
+  ' FIX #4 — WebSocket établi DANS la branche succès uniquement
+  B -> F : WebSocket connect\n{type: "mission_subscribed", id: 42}
+  deactivate B
+
+  F --> U : Affiche "Mission en cours"\navec carte temps réel
+  deactivate F
+end
+
+== Phase 1 : Navigation vers le point de collecte ==
+
+loop ~10Hz - Navigation vers collecte
+  R -> MQ : publish robot/position\n{id: 42, x, y, heading,\nsubstate: "navigating_to_pickup"}
+  activate MQ
+  MQ -> B : forward
+  activate B
+  B -> F : WebSocket push\n{type: "position_update", x, y,\nheading, substate: "navigating_to_pickup"}
+  activate F
+  F -> U : Met à jour position\nsur la carte
+  deactivate F
+  deactivate B
+  deactivate MQ
+end
+
+R -> MQ : publish robot/nav/arrived\n{id: 42, location: "accueil"}
+activate MQ
+MQ -> B : forward
+activate B
+B -> DB : UPDATE mission\nstatus: "awaiting_loading"
+activate DB
+DB --> B : OK
+deactivate DB
+B -> F : WebSocket\n{type: "status_update",\nsubstate: "awaiting_loading"}
+activate F
+deactivate B
+deactivate MQ
+F --> U : "Robot arrivé au point de collecte\n→ Posez le document puis confirmez"
+
+== FIX #6 — Phase 2 : Attente chargement du document ==
+
+U -> F : Confirme "Document posé"
+F -> B : POST /api/missions/42/confirm-loading
+activate B
+B -> MQ : publish robot/mission/loading-confirmed\n{id: 42}
+activate MQ
+MQ -> R : forward
+R --> MQ : publish robot/ack\n{id: 42, status: "loading_confirmed"}
+MQ --> B : forward
+deactivate MQ
+B -> DB : UPDATE mission\nstatus: "navigating_to_destination"
+activate DB
+DB --> B : OK
+deactivate DB
+B --> F : 200 OK
+B -> F : WebSocket\n{type: "status_update",\nsubstate: "navigating_to_destination"}
+deactivate B
+F --> U : "Transport en cours vers Bureau 204"
+deactivate F
+
+== Phase 3 : Navigation vers la destination ==
+
+loop ~10Hz - Navigation vers destination
+  R -> MQ : publish robot/position\n{id: 42, x, y, heading,\nsubstate: "navigating_to_destination"}
+  activate MQ
+  MQ -> B : forward
+  activate B
+  B -> F : WebSocket push\n{type: "position_update", x, y,\nheading, substate: "navigating_to_destination"}
+  activate F
+  F -> U : Met à jour position\n"Transport en cours"
+  deactivate F
+  deactivate B
+  deactivate MQ
+end
+
+== Arrêt d'urgence (extension UC-04) ==
+
+opt Utilisateur ou LiDAR déclenche STOP
+
+  U -> F : Clique STOP\n(ou touche Espace)
+  activate F
+  ' FIX #3 — Topic MQTT dédié avec QoS 2, pas de "priority" dans le payload
+  ' Le topic lui-même EST le signal d'urgence, QoS 2 garantit exactly-once delivery
+  F -> B : POST /api/missions/42/emergency-stop
+  activate B
+  B -> MQ : publish robot/emergency-stop\n{id: 42}\n[QoS 2 - exactly once]
+  activate MQ
+  MQ -> R : forward IMMÉDIAT\n(subscriber haute priorité côté robot)
+  R --> MQ : publish robot/ack\n{id: 42, status: "paused"}
+  MQ --> B : forward
+  deactivate MQ
+  B -> DB : UPDATE mission status: "paused"
+  activate DB
+  DB --> B : OK
+  deactivate DB
+  B -> F : WebSocket\n{type: "mission_paused", id: 42}
+  deactivate B
+  F --> U : "Robot arrêté\n→ Reprendre ou Annuler ?"
+  deactivate F
+
+  ' FIX #2 — Reprise explicite après arrêt d'urgence
+  alt Utilisateur choisit "Reprendre"
+    U -> F : Clique "Reprendre la mission"
+    activate F
+    F -> B : POST /api/missions/42/resume
+    activate B
+    B -> MQ : publish robot/mission/resume\n{id: 42}
+    activate MQ
+    MQ -> R : forward
+    R --> MQ : publish robot/ack\n{id: 42, status: "resumed"}
+    MQ --> B : forward
+    deactivate MQ
+    B -> DB : UPDATE mission status: "in_progress"
+    activate DB
+    DB --> B : OK
+    deactivate DB
+    B -> F : WebSocket\n{type: "mission_resumed", id: 42}
+    deactivate B
+    F --> U : "Mission reprise\n→ Navigation en cours"
+    deactivate F
+
+  else Utilisateur choisit "Annuler"
+    U -> F : Clique "Annuler la mission"
+    activate F
+    F -> B : POST /api/missions/42/cancel
+    activate B
+    B -> MQ : publish robot/mission/cancel\n{id: 42}
+    activate MQ
+    MQ -> R : forward
+    R --> MQ : publish robot/ack\n{id: 42, status: "cancelled"}
+    MQ --> B : forward
+    deactivate MQ
+    B -> DB : UPDATE mission\nstatus: "cancelled",\ncancelled_at: NOW(),\nreason: "user_cancelled_after_stop"
+    activate DB
+    DB --> B : OK
+    deactivate DB
+    B -> F : WebSocket\n{type: "mission_cancelled", id: 42}
+    deactivate B
+    F --> U : "Mission annulée"
+    deactivate F
+  end
+end
+
+== Phase 4 : Arrivée et livraison ==
+
+R -> MQ : publish robot/mission/complete\n{id: 42, status: "completed"}
+deactivate R
+activate MQ
+MQ -> B : forward
+activate B
+deactivate MQ
+
+B -> DB : UPDATE mission\nstatus: "completed", completed_at: NOW()
+activate DB
+DB --> B : OK
+deactivate DB
+
+B -> F : WebSocket\n{type: "mission_complete", id: 42}
+activate F
+deactivate B
+
+F --> U : Affiche "Livraison effectuée ✓\nDocument livré à Bureau 204"
+deactivate F
+
+@enduml
