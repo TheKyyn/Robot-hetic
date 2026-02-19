@@ -1,63 +1,122 @@
 @startuml state-mission
-title RobLaude - Diagramme d'États: Cycle de Vie d'une Mission
-
+title RobLaude v1.1 - Diagramme d'États: Cycle de Vie d'une Mission (corrigé)
 skinparam state {
   BackgroundColor<<success>> LightGreen
   BackgroundColor<<error>> LightCoral
   BackgroundColor<<warning>> LightYellow
+  BackgroundColor<<active>> LightBlue
+  BackgroundColor<<recoverable>> Wheat
 }
 
-[*] --> EnAttente : Mission créée
+[*] --> EnAttente : Mission créée (UC-01 ou UC-02)
 
 state "En Attente" as EnAttente {
-  EnAttente : Robot disponible
-  EnAttente : Validation des points
+  EnAttente : Robot disponible vérifié
+  EnAttente : Points/objets configurés
+  EnAttente : Type mission : transport | pick_and_place
 }
 
-state "En Cours" as EnCours {
-  state "Vers Départ" as VersDepart
-  state "En Collecte" as EnCollecte
-  state "Vers Arrivée" as VersArrivee
+state "En Cours" as EnCours <<active>> {
 
-  VersDepart : Navigation vers\npoint de collecte
-  EnCollecte : Attente chargement\ndu document
-  VersArrivee : Navigation vers\npoint de livraison
+  ' === Branche UC-01 : Transport simple ===
+  state "UC-01 : Transport" as UC01Branch {
+    state "Vers Point Collecte" as VersDepart01
+    state "En Attente Chargement" as EnChargement
+    state "Vers Destination" as VersArrivee01
 
-  [*] --> VersDepart
-  VersDepart --> EnCollecte : Point atteint
-  EnCollecte --> VersArrivee : Document chargé\n(confirmation utilisateur)
-  VersArrivee --> [*] : Destination atteinte
+    VersDepart01 : Navigation Nav2\nvers point de collecte
+    EnChargement : Attente confirmation\nutilisateur (document posé)
+    VersArrivee01 : Navigation Nav2\nvers point livraison
+
+    [*] --> VersDepart01
+    VersDepart01 --> EnChargement : Point collecte atteint
+    EnChargement --> VersArrivee01 : Utilisateur confirme\nchargement (POST /confirm-loading)
+    VersArrivee01 --> [*] : Destination atteinte
+  }
+
+  ' === Branche UC-02 : Pick & Place ===
+  state "UC-02 : Pick & Place" as UC02Branch {
+    state "Vers Objet" as VersObjet
+    state "Détection Objet" as DetectionObjet
+    state "Saisie Objet" as SaisieObjet
+    state "Transport Objet" as TransportObjet
+    state "Dépôt Objet" as DepotObjet
+
+    VersObjet : Navigation Nav2\nvers emplacement objet
+    DetectionObjet : Analyse RealSense\nOpenCV — calcul pose 3D
+    SaisieObjet : MoveIt2 motion planning\nGripper — max 3 tentatives
+    TransportObjet : Navigation Nav2\nbras maintenu stable
+    DepotObjet : MoveIt2 dépôt\nretour position repos
+
+    state "Tentative Saisie" as TentativeSaisie {
+      TentativeSaisie : Compteur: 1..3
+      TentativeSaisie : Ajustement pose si échec
+    }
+
+    [*] --> VersObjet
+    VersObjet --> DetectionObjet : Emplacement atteint
+    DetectionObjet --> SaisieObjet : Objet détecté\n(pose 3D calculée)
+    DetectionObjet --> [*] : Objet non détecté\n→ Saisie Échouée
+    SaisieObjet --> TentativeSaisie : Lancement tentative
+    TentativeSaisie --> TransportObjet : Saisie réussie\n(capteur force OK)
+    TentativeSaisie --> TentativeSaisie : Échec — réessai\n(< 3 tentatives)
+    TentativeSaisie --> [*] : 3 tentatives épuisées\n→ Saisie Échouée
+    TransportObjet --> DepotObjet : Destination atteinte
+    TransportObjet --> [*] : Objet tombé\n→ Échec
+    DepotObjet --> [*] : Dépôt confirmé
+  }
 }
 
 state "En Pause" as EnPause <<warning>> {
   EnPause : Arrêt d'urgence activé
-  EnPause : Attente intervention
+  EnPause : Position maintenue
+  EnPause : Bras en sécurité (si déployé)
+  EnPause : Attente intervention humaine
 }
 
 state "Terminée" as Terminee <<success>> {
   Terminee : Mission accomplie
-  Terminee : Log enregistré
+  Terminee : Objet/document livré confirmé
+  Terminee : Log enregistré en DB
+}
+
+' FIX #5 — SaisieEchouee est un état RÉCUPÉRABLE, distinct de Échec
+state "Saisie Échouée" as SaisieEchouee <<recoverable>> {
+  SaisieEchouee : 3 tentatives gripper épuisées\nou objet non détecté
+  SaisieEchouee : Notification utilisateur
+  SaisieEchouee : Bras retour position repos
+  SaisieEchouee : Robot reste sur place
 }
 
 state "Échec" as Echec <<error>> {
   Echec : Obstacle infranchissable
-  Echec : Timeout dépassé
-  Echec : Erreur robot
+  Echec : Timeout navigation dépassé
+  Echec : Erreur critique robot
+  Echec : Objet tombé pendant transport
 }
 
 state "Annulée" as Annulee <<error>> {
-  Annulee : Annulation manuelle
+  Annulee : Annulation manuelle utilisateur
+  Annulee : Log raison annulation
 }
 
-EnAttente --> EnCours : Robot assigné\n& prêt
-EnAttente --> Annulee : Annulation\navant départ
+' === Transitions principales ===
+EnAttente --> EnCours : Robot assigné & prêt\n(type détermine la branche)
+EnAttente --> Annulee : Annulation avant départ
 
-EnCours --> EnPause : Arrêt d'urgence\n(utilisateur ou capteur)
-EnCours --> Terminee : Destination atteinte\n& livraison confirmée
-EnCours --> Echec : Obstacle bloquant\n/ Timeout / Erreur
+EnCours --> EnPause : Arrêt d'urgence\n(utilisateur, LiDAR ou capteur)
+EnCours --> Terminee : Mission complète\n& livraison confirmée
+EnCours --> Echec : Obstacle bloquant\n/ Timeout / Erreur critique\n/ Objet tombé
+EnCours --> SaisieEchouee : Détection échouée\nou 3 saisies ratées
 
-EnPause --> EnCours : Reprise mission
-EnPause --> Annulee : Annulation\npar utilisateur
+' FIX #2 — Reprise explicite depuis En Pause
+EnPause --> EnCours : Reprise mission\n(confirmation utilisateur\nPOST /resume)
+EnPause --> Annulee : Annulation depuis pause\n(POST /cancel)
+
+' FIX #5 — Chemin de relance depuis Saisie Échouée
+' L'utilisateur peut repositionner l'objet et relancer
+SaisieEchouee --> EnAttente : Relance mission\n(utilisateur repositionne\nobjet et relance)
+SaisieEchouee --> Annulee : Annulation\npar utilisateur
 
 Terminee --> [*]
 Echec --> [*]
@@ -65,15 +124,48 @@ Annulee --> [*]
 
 note right of EnPause
   L'arrêt d'urgence peut être
-  déclenché par:
+  déclenché par :
   - Bouton STOP (UI)
-  - Raccourci clavier
-  - Détection obstacle (Lidar)
+  - Touche Espace (raccourci)
+  - Détection obstacle (LiDAR)
+  - Capteur force bras (surcharge)
+
+  Topic MQTT dédié :
+  robot/emergency-stop [QoS 2]
+  (pas de champ "priority" dans
+  le payload — le topic lui-même
+  est le signal d'urgence)
+end note
+
+note right of SaisieEchouee
+  RÉCUPÉRABLE ≠ Échec terminal
+  ─────────────────────────
+  Situation récupérable car :
+  - Le robot est fonctionnel
+  - L'objet peut être repositionné
+  - L'utilisateur peut relancer
+  → Transition vers EnAttente
+    (nouvelle tentative possible)
+
+  Contrairement à Échec qui est
+  un état terminal (obstacle,
+  erreur critique, objet tombé)
 end note
 
 note bottom of EnCours
-  Sous-états internes
-  pour suivi précis
+  Branche automatiquement choisie
+  selon type mission :
+  - "transport" → UC-01 Branch
+  - "pick_and_place" → UC-02 Branch
+end note
+
+note left of Echec
+  État TERMINAL :
+  Aucune relance automatique.
+  L'utilisateur doit créer
+  une nouvelle mission après
+  résolution du problème
+  (obstacle retiré, robot reset...)
 end note
 
 @enduml
