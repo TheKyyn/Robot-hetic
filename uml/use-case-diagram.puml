@@ -1,42 +1,93 @@
 @startuml use-case-diagram
-title RobLaude - Diagramme de Cas d'Utilisation
-
-left to right direction
+title RobLaude v1.1 - Diagramme de Cas d'Utilisation (corrigé)
 skinparam actorStyle awesome
 skinparam packageStyle rectangle
+skinparam usecase {
+  BackgroundColor LightBlue
+  BorderColor DarkBlue
+}
 
 actor "Utilisateur" as user
 actor "Admin" as admin
-actor "Robot" as robot <<system>>
+actor "Robot (ROS2)" as robot <<system>>
+
+' Admin hérite des droits Utilisateur (généralisation UML correcte)
+admin --|> user
 
 rectangle "RobLaude - Robot d'Assistance Autonome" {
+
+  ' === Utilisateur ===
   usecase "UC-01\nDemander un transport" as UC1
-  usecase "UC-02\nSuivre la mission" as UC2
-  usecase "UC-03\nArrêt d'urgence" as UC3
-  usecase "UC-04\nConfigurer les points" as UC4
-  usecase "UC-05\nConsulter l'historique" as UC5
+  usecase "UC-02\nRécupérer un objet\n(bras robotique)" as UC2
+  usecase "UC-03\nSuivre la mission" as UC3
+  usecase "UC-04\nArrêt d'urgence" as UC4
+
+  ' === Admin uniquement ===
+  usecase "UC-05\nConfigurer les points\nde collecte/livraison" as UC5
+  usecase "UC-06\nConfigurer les objets\nsaisissables" as UC6
+  usecase "UC-07\nConsulter l'historique\net statistiques" as UC7
+
+  ' === Relations utilisateur ===
+  user --> UC1
+  user --> UC2
+  user --> UC3
+  user --> UC4
+
+  ' === Relations admin ===
+  admin --> UC5
+  admin --> UC6
+  admin --> UC7
+
+  ' === Communication robot ===
+  UC1 --> robot : <<communicate>>
+  UC2 --> robot : <<communicate>>
+  UC3 --> robot : <<communicate>>
+  UC4 --> robot : <<communicate>>
+
+  ' === Relations include ===
+  ' UC-01 et UC-02 incluent toujours le suivi (UC-03 s'exécute à chaque mission)
+  UC1 .> UC3 : <<include>>
+  UC2 .> UC3 : <<include>>
+
+  ' === Dépendance / Précondition ===
+  ' UC-06 est un prérequis de UC-02, PAS un include.
+  ' L'admin configure les objets une fois, pas à chaque mission.
+  UC2 ..> UC6 : <<precondition>>
 }
 
-user --> UC1
-user --> UC2
-user --> UC3
-admin --> UC4
-admin --> UC5
-admin --|> user : extends
-
-UC1 --> robot : <<communicate>>
-UC2 --> robot : <<communicate>>
-UC3 --> robot : <<communicate>>
-
-note right of UC1
-  Point de départ et
-  d'arrivée sélectionnés
-  via interface accessible
+note right of UC2
+  Nécessite (préconditions) :
+  - Bras robotique calibré
+  - Caméra RealSense active
+  - Objet enregistré via UC-06
+  - MoveIt2 opérationnel
 end note
 
-note right of UC3
-  Accessible via bouton
-  et raccourci clavier
+note right of UC4
+  Déclenchable par :
+  - Bouton STOP (UI)
+  - Raccourci clavier (Espace)
+  - Détection obstacle (LiDAR)
+  - Chute objet (capteur force)
+end note
+
+note bottom of UC1
+  Transport sans manipulation :
+  le document est posé
+  manuellement sur le robot
+  par l'utilisateur
+end note
+
+note bottom of UC2
+  Transport avec manipulation :
+  le bras saisit et dépose
+  l'objet automatiquement
+end note
+
+note left of UC6
+  Précondition de UC-02 :
+  exécuté une fois par l'admin,
+  pas à chaque mission.
 end note
 
 @enduml
